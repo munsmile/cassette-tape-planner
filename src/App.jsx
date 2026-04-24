@@ -331,6 +331,13 @@ export default function CassetteTapePlanner() {
   const [normalizeVolume, setNormalizeVolume] = useState(true);
   const [isWaitingSilence, setIsWaitingSilence] = useState(false);
   const [isDecoding, setIsDecoding] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => {
+    try {
+      return localStorage.getItem("cassette-theme") === "dark";
+    } catch {
+      return false;
+    }
+  });
 
   const audioContextRef = useRef(null);
   const gainNodeRef = useRef(null);
@@ -498,6 +505,12 @@ export default function CassetteTapePlanner() {
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("cassette-theme", darkMode ? "dark" : "light");
+    } catch {}
+  }, [darkMode]);
 
   function stopProgressTimer() {
     progressRunningRef.current = false;
@@ -714,7 +727,32 @@ export default function CassetteTapePlanner() {
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-neutral-100 to-white p-4 text-neutral-900">
+    <main className={`min-h-screen p-4 transition-colors ${darkMode ? "dark-mode bg-gradient-to-b from-neutral-950 to-neutral-900 text-neutral-100" : "bg-gradient-to-b from-neutral-100 to-white text-neutral-900"}`}>
+      <style>{`
+        .dark-mode .bg-white { background-color: #18181b !important; }
+        .dark-mode .bg-neutral-50 { background-color: #27272a !important; }
+        .dark-mode .bg-neutral-100 { background-color: #3f3f46 !important; }
+        .dark-mode .bg-neutral-200 { background-color: #52525b !important; }
+        .dark-mode .text-neutral-900 { color: #f5f5f5 !important; }
+        .dark-mode .text-neutral-800 { color: #f5f5f5 !important; }
+        .dark-mode .text-neutral-700 { color: #e5e5e5 !important; }
+        .dark-mode .text-neutral-600 { color: #d4d4d4 !important; }
+        .dark-mode .text-neutral-500 { color: #a1a1aa !important; }
+        .dark-mode .text-neutral-400 { color: #a1a1aa !important; }
+        .dark-mode .border { border-color: #3f3f46 !important; }
+        .dark-mode .border-neutral-200 { border-color: #3f3f46 !important; }
+        .dark-mode .border-neutral-300 { border-color: #52525b !important; }
+        .dark-mode input, .dark-mode select { background-color: #09090b !important; color: #f5f5f5 !important; border-color: #52525b !important; }
+        .dark-mode input::placeholder { color: #71717a !important; }
+        .dark-mode .shadow-sm { box-shadow: 0 1px 2px rgba(0,0,0,0.5) !important; }
+        .dark-mode .hover\\:bg-neutral-100:hover { background-color: #3f3f46 !important; }
+        .dark-mode .bg-red-50 { background-color: rgba(127, 29, 29, 0.35) !important; }
+        .dark-mode .text-red-700 { color: #fca5a5 !important; }
+        .dark-mode .bg-blue-50 { background-color: rgba(30, 58, 138, 0.35) !important; }
+        .dark-mode .text-blue-700 { color: #93c5fd !important; }
+        .dark-mode .bg-amber-50 { background-color: rgba(120, 53, 15, 0.35) !important; }
+        .dark-mode .text-amber-800 { color: #fcd34d !important; }
+      `}</style>
       <div className="mx-auto max-w-6xl">
         <header className="mb-6 rounded-3xl bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -722,7 +760,13 @@ export default function CassetteTapePlanner() {
               <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-neutral-500"><Music size={16} /> TAPE</div>
               <h1 className="text-3xl font-black tracking-tight">워크맨팩토리 카세트 테이프 녹음기</h1>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${darkMode ? "border-neutral-600 bg-neutral-800 text-neutral-100 hover:bg-neutral-700" : "bg-white text-neutral-900 hover:bg-neutral-100"}`}
+                onClick={() => setDarkMode((prev) => !prev)}
+              >
+                {darkMode ? "라이트 모드" : "다크 모드"}
+              </button>
               <label className="text-sm font-semibold text-neutral-600">테이프 총 길이</label>
               <input className="w-24 rounded-xl border px-3 py-2 text-right text-lg font-bold outline-none focus:ring-2 focus:ring-neutral-300" type="number" min="1" value={tapeMinutes} onChange={(event) => setTapeMinutes(Math.max(1, Number(event.target.value) || 1))} />
               <span className="text-sm text-neutral-500">분 → 각 면: {secondsToTime(sideSeconds)}</span>
