@@ -96,8 +96,10 @@ function TrackRow({
   onTrackDragEnd,
   onChangeTitle,
   onChangeSeconds,
+  onReplaceFile,
   onRemove,
 }) {
+  const replaceInputRef = useRef(null);
   const minutes = Math.floor(track.seconds / 60);
   const seconds = track.seconds % 60;
 
@@ -125,6 +127,8 @@ function TrackRow({
         className="rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-neutral-300"
         value={track.title}
         onChange={(event) => onChangeTitle(track.id, event.target.value)}
+        onDoubleClick={() => replaceInputRef.current?.click()}
+        title="더블클릭하면 이 곡의 파일을 교체할 수 있습니다."
         placeholder="제목"
       />
       <input
@@ -151,6 +155,17 @@ function TrackRow({
       <button className="flex h-9 w-9 items-center justify-center rounded-lg hover:bg-neutral-100" onClick={() => onRemove(track.id)}>
         <X size={16} />
       </button>
+      <input
+        ref={replaceInputRef}
+        className="hidden"
+        type="file"
+        accept="audio/*,.mp3,.flac,.wav,.aiff,.aif,.m4a,.alac"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) onReplaceFile(track.id, file);
+          event.target.value = "";
+        }}
+      />
       {track.decodeError && (
         <div className="col-span-5 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
           이 파일은 현재 브라우저에서 디코딩할 수 없습니다. FLAC은 Chrome/Edge에서 테스트해보세요.
@@ -197,7 +212,7 @@ function PlaylistControls({ label, disabled, isPlaying, isPaused, progress, onPl
   );
 }
 
-function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPlaying, isPaused, progress, silenceSeconds, onDropTracks, onReorderTracks, onAddManual, onPlaySide, onPrevious, onNext, onPause, onStop, onChangeTitle, onChangeSeconds, onRemove }) {
+function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPlaying, isPaused, progress, silenceSeconds, onDropTracks, onReorderTracks, onAddManual, onPlaySide, onPrevious, onNext, onPause, onStop, onChangeTitle, onChangeSeconds, onReplaceFile, onRemove }) {
   const [dragOver, setDragOver] = useState(false);
   const [draggedTrackIndex, setDraggedTrackIndex] = useState(null);
   const [dragOverTrackIndex, setDragOverTrackIndex] = useState(null);
@@ -283,6 +298,7 @@ function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPla
             }}
             onChangeTitle={onChangeTitle}
             onChangeSeconds={onChangeSeconds}
+            onReplaceFile={onReplaceFile}
             onRemove={onRemove}
           />
         ))}
@@ -693,6 +709,50 @@ export default function CassetteTapePlanner() {
     });
   }
 
+  async function replaceTrackFile(side, id, file) {
+    if (!isSupportedAudioFile(file)) {
+      setAudioError("지원하지 않는 오디오 파일 형식입니다.");
+      return;
+    }
+
+    setIsDecoding(true);
+    setAudioError("");
+
+    try {
+      const audioContext = await ensureAudioContext();
+      const [newTrack] = await audioFilesToTracks([file], audioContext);
+
+      const setter = side === "A" ? setSideA : setSideB;
+      setter((prev) =>
+        prev.map((track) =>
+          track.id === id
+            ? {
+                ...track,
+                title: newTrack.title,
+                seconds: newTrack.seconds,
+                fileName: newTrack.fileName,
+                type: newTrack.type,
+                file: newTrack.file,
+                audioBuffer: newTrack.audioBuffer,
+                normalizeGain: newTrack.normalizeGain,
+                decodeError: newTrack.decodeError,
+              }
+            : track
+        )
+      );
+
+      if (currentTrack?.id === id) {
+        stopPlayback();
+      }
+
+      if (newTrack?.decodeError) {
+        setAudioError("교체한 파일은 현재 브라우저에서 디코딩할 수 없습니다.");
+      }
+    } finally {
+      setIsDecoding(false);
+    }
+  }
+
   function removeTrack(side, id) {
     const setter = side === "A" ? setSideA : setSideB;
     setter((prev) => {
@@ -863,6 +923,7 @@ export default function CassetteTapePlanner() {
             onStop={stopPlayback}
             onChangeTitle={(id, title) => updateTrack("A", id, () => ({ title }))}
             onChangeSeconds={(id, seconds) => updateTrack("A", id, () => ({ seconds }))}
+            onReplaceFile={(id, file) => replaceTrackFile("A", id, file)}
             onRemove={(id) => removeTrack("A", id)}
           />
           <TapeSide
@@ -885,6 +946,7 @@ export default function CassetteTapePlanner() {
             onStop={stopPlayback}
             onChangeTitle={(id, title) => updateTrack("B", id, () => ({ title }))}
             onChangeSeconds={(id, seconds) => updateTrack("B", id, () => ({ seconds }))}
+            onReplaceFile={(id, file) => replaceTrackFile("B", id, file)}
             onRemove={(id) => removeTrack("B", id)}
           />
         </div>
