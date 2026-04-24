@@ -345,6 +345,7 @@ export default function CassetteTapePlanner() {
   const silenceSecondsRef = useRef(0);
   const silenceTimerRef = useRef(null);
   const progressTimerRef = useRef(null);
+  const progressRunningRef = useRef(false);
   const playbackStartContextTimeRef = useRef(0);
   const pausedOffsetRef = useRef(0);
   const currentDurationRef = useRef(0);
@@ -474,14 +475,20 @@ export default function CassetteTapePlanner() {
   function startProgressTimer() {
     if (progressTimerRef.current) cancelAnimationFrame(progressTimerRef.current);
 
+    progressRunningRef.current = true;
+
     const tick = () => {
       const audioContext = audioContextRef.current;
-      if (!audioContext || !isPlayingRef.current) return;
+      if (!audioContext || !progressRunningRef.current) return;
 
       const elapsed = audioContext.currentTime - playbackStartContextTimeRef.current;
       const currentTime = Math.min(currentDurationRef.current, pausedOffsetRef.current + elapsed);
+
       setProgress({ currentTime, duration: currentDurationRef.current });
-      progressTimerRef.current = requestAnimationFrame(tick);
+
+      if (progressRunningRef.current && currentTime < currentDurationRef.current) {
+        progressTimerRef.current = requestAnimationFrame(tick);
+      }
     };
 
     progressTimerRef.current = requestAnimationFrame(tick);
@@ -493,6 +500,8 @@ export default function CassetteTapePlanner() {
   }, [isPlaying]);
 
   function stopProgressTimer() {
+    progressRunningRef.current = false;
+
     if (progressTimerRef.current) {
       cancelAnimationFrame(progressTimerRef.current);
       progressTimerRef.current = null;
@@ -523,6 +532,7 @@ export default function CassetteTapePlanner() {
     source.onended = () => {
       if (currentSourceIdRef.current !== sourceId) return;
       sourceNodeRef.current = null;
+      setProgress({ currentTime: currentDurationRef.current, duration: currentDurationRef.current });
       playNextTrackAfterEnded();
     };
 
