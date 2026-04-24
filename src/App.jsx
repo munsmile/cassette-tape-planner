@@ -25,6 +25,30 @@ async function decodeAudioFile(audioContext, file) {
   return await audioContext.decodeAudioData(arrayBuffer.slice(0));
 }
 
+function calculateNormalizeGain(audioBuffer) {
+  let sumSquares = 0;
+  let peak = 0;
+  let sampleCount = 0;
+
+  for (let channel = 0; channel < audioBuffer.numberOfChannels; channel += 1) {
+    const data = audioBuffer.getChannelData(channel);
+    for (let i = 0; i < data.length; i += 1) {
+      const sample = data[i];
+      const abs = Math.abs(sample);
+      sumSquares += sample * sample;
+      if (abs > peak) peak = abs;
+      sampleCount += 1;
+    }
+  }
+
+  const rms = Math.sqrt(sumSquares / Math.max(1, sampleCount));
+  const targetRms = 0.12;
+  const maxBoost = 3.0;
+  const peakLimit = peak > 0 ? 0.95 / peak : 1;
+  const rmsGain = rms > 0 ? targetRms / rms : 1;
+  return Math.min(rmsGain, peakLimit, maxBoost);
+}
+
 async function audioFilesToTracks(files, audioContext) {
   const audioFiles = Array.from(files).filter(isSupportedAudioFile);
   const tracks = [];
@@ -32,6 +56,7 @@ async function audioFilesToTracks(files, audioContext) {
   for (const file of audioFiles) {
     try {
       const audioBuffer = await decodeAudioFile(audioContext, file);
+      const normalizeGain = calculateNormalizeGain(audioBuffer);
       tracks.push({
         id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
         title: fileNameToTitle(file.name),
@@ -40,6 +65,7 @@ async function audioFilesToTracks(files, audioContext) {
         type: file.type || "audio file",
         file,
         audioBuffer,
+        normalizeGain,
       });
     } catch (error) {
       tracks.push({
@@ -50,6 +76,7 @@ async function audioFilesToTracks(files, audioContext) {
         type: file.type || "audio file",
         file,
         audioBuffer: null,
+        normalizeGain: 1,
         decodeError: true,
       });
     }
@@ -58,17 +85,50 @@ async function audioFilesToTracks(files, audioContext) {
   return tracks;
 }
 
-function TrackRow({ track, index, isCurrent, onChangeTitle, onChangeSeconds, onRemove }) {
+function TrackRow({
+  track,
+  index,
+  isCurrent,
+  isDragging,
+  onTrackDragStart,
+  onTrackDragOver,
+  onTrackDrop,
+  onTrackDragEnd,
+  onChangeTitle,
+  onChangeSeconds,
+  onReplaceFile,
+  onRemove,
+}) {
+  const replaceInputRef = useRef(null);
   const minutes = Math.floor(track.seconds / 60);
   const seconds = track.seconds % 60;
 
   return (
-    <div className={`grid grid-cols-[32px_1fr_82px_82px_36px] items-center gap-2 rounded-xl border p-2 shadow-sm ${isCurrent ? "border-neutral-900 bg-neutral-100" : "bg-white"}`}>
+    <div
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "move";
+        onTrackDragStart(index);
+      }}
+      onDragOver={(event) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        onTrackDragOver(index);
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        onTrackDrop(index);
+      }}
+      onDragEnd={onTrackDragEnd}
+      className={`grid cursor-move grid-cols-[32px_1fr_82px_82px_36px] items-center gap-2 rounded-xl border p-2 shadow-sm transition ${isCurrent ? "border-neutral-900 bg-neutral-100" : "bg-white"} ${isDragging ? "opacity-40 ring-2 ring-neutral-300" : ""}`}
+    >
       <div className="text-center text-sm font-semibold text-neutral-400">{index + 1}</div>
       <input
         className="rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-neutral-300"
         value={track.title}
         onChange={(event) => onChangeTitle(track.id, event.target.value)}
+        onDoubleClick={() => replaceInputRef.current?.click()}
+        title="더블클릭하면 이 곡의 파일을 교체할 수 있습니다."
         placeholder="제목"
       />
       <input
@@ -95,6 +155,17 @@ function TrackRow({ track, index, isCurrent, onChangeTitle, onChangeSeconds, onR
       <button className="flex h-9 w-9 items-center justify-center rounded-lg hover:bg-neutral-100" onClick={() => onRemove(track.id)}>
         <X size={16} />
       </button>
+      <input
+        ref={replaceInputRef}
+        className="hidden"
+        type="file"
+        accept="audio/*,.mp3,.flac,.wav,.aiff,.aif,.m4a,.alac"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) onReplaceFile(track.id, file);
+          event.target.value = "";
+        }}
+      />
       {track.decodeError && (
         <div className="col-span-5 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
           이 파일은 현재 브라우저에서 디코딩할 수 없습니다. FLAC은 Chrome/Edge에서 테스트해보세요.
@@ -141,8 +212,10 @@ function PlaylistControls({ label, disabled, isPlaying, isPaused, progress, onPl
   );
 }
 
-function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPlaying, isPaused, progress, silenceSeconds, onDropTracks, onAddManual, onPlaySide, onPrevious, onNext, onPause, onStop, onChangeTitle, onChangeSeconds, onRemove }) {
+function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPlaying, isPaused, progress, silenceSeconds, onDropTracks, onReorderTracks, onAddManual, onPlaySide, onPrevious, onNext, onPause, onStop, onChangeTitle, onChangeSeconds, onReplaceFile, onRemove }) {
   const [dragOver, setDragOver] = useState(false);
+  const [draggedTrackIndex, setDraggedTrackIndex] = useState(null);
+  const [dragOverTrackIndex, setDragOverTrackIndex] = useState(null);
   const musicSeconds = tracks.reduce((sum, track) => sum + track.seconds, 0);
   const silenceGapCount = Math.max(0, tracks.length - 1);
   const silenceTotalSeconds = silenceGapCount * Math.max(0, Number(silenceSeconds) || 0);
@@ -156,8 +229,22 @@ function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPla
   async function handleDrop(event) {
     event.preventDefault();
     setDragOver(false);
-    const droppedTracks = await onDropTracks(event.dataTransfer.files);
-    return droppedTracks;
+
+    if (event.dataTransfer.files?.length > 0) {
+      await onDropTracks(event.dataTransfer.files);
+    }
+  }
+
+  function handleTrackDrop(dropIndex) {
+    if (draggedTrackIndex === null || draggedTrackIndex === dropIndex) {
+      setDraggedTrackIndex(null);
+      setDragOverTrackIndex(null);
+      return;
+    }
+
+    onReorderTracks(draggedTrackIndex, dropIndex);
+    setDraggedTrackIndex(null);
+    setDragOverTrackIndex(null);
   }
 
   return (
@@ -201,8 +288,17 @@ function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPla
             track={track}
             index={index}
             isCurrent={isThisSideActive && currentTrackId === track.id}
+            isDragging={draggedTrackIndex === index || dragOverTrackIndex === index}
+            onTrackDragStart={setDraggedTrackIndex}
+            onTrackDragOver={setDragOverTrackIndex}
+            onTrackDrop={handleTrackDrop}
+            onTrackDragEnd={() => {
+              setDraggedTrackIndex(null);
+              setDragOverTrackIndex(null);
+            }}
             onChangeTitle={onChangeTitle}
             onChangeSeconds={onChangeSeconds}
+            onReplaceFile={onReplaceFile}
             onRemove={onRemove}
           />
         ))}
@@ -248,8 +344,16 @@ export default function CassetteTapePlanner() {
   const [progress, setProgress] = useState({ currentTime: 0, duration: 0 });
   const [audioError, setAudioError] = useState("");
   const [silenceSeconds, setSilenceSeconds] = useState(0);
+  const [normalizeVolume, setNormalizeVolume] = useState(true);
   const [isWaitingSilence, setIsWaitingSilence] = useState(false);
   const [isDecoding, setIsDecoding] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => {
+    try {
+      return localStorage.getItem("cassette-theme") === "dark";
+    } catch {
+      return false;
+    }
+  });
 
   const audioContextRef = useRef(null);
   const gainNodeRef = useRef(null);
@@ -266,9 +370,11 @@ export default function CassetteTapePlanner() {
   const progressTimerRef = useRef(null);
   const progressRunningRef = useRef(false);
   const playbackStartContextTimeRef = useRef(0);
+  const playbackStartedAtMsRef = useRef(0);
   const pausedOffsetRef = useRef(0);
   const currentDurationRef = useRef(0);
   const manualStopRef = useRef(false);
+  const currentSourceIdRef = useRef(0);
 
   const sideSeconds = useMemo(() => Math.round((Number(tapeMinutes) || 0) * 60 / 2), [tapeMinutes]);
   const supportsAudioContextOutputSelection = typeof AudioContext !== "undefined" && "setSinkId" in AudioContext.prototype;
@@ -378,33 +484,37 @@ export default function CassetteTapePlanner() {
 
   function stopCurrentSource() {
     if (sourceNodeRef.current) {
-      manualStopRef.current = true;
+      currentSourceIdRef.current += 1;
+      sourceNodeRef.current.onended = null;
       try {
         sourceNodeRef.current.stop();
       } catch {}
-      sourceNodeRef.current.disconnect();
+      try {
+        sourceNodeRef.current.disconnect();
+      } catch {}
       sourceNodeRef.current = null;
     }
   }
 
   function startProgressTimer() {
-    if (progressTimerRef.current) cancelAnimationFrame(progressTimerRef.current);
+    stopProgressTimer();
     progressRunningRef.current = true;
 
     const tick = () => {
-      const audioContext = audioContextRef.current;
-      if (!audioContext || !progressRunningRef.current) return;
+      if (!progressRunningRef.current) return;
 
-      const elapsed = audioContext.currentTime - playbackStartContextTimeRef.current;
-      const currentTime = Math.min(currentDurationRef.current, pausedOffsetRef.current + elapsed);
-      setProgress({ currentTime, duration: currentDurationRef.current });
+      const duration = currentDurationRef.current;
+      const elapsed = (performance.now() - playbackStartedAtMsRef.current) / 1000;
+      const currentTime = Math.min(duration, Math.max(0, elapsed));
 
-      if (currentTime < currentDurationRef.current) {
+      setProgress({ currentTime, duration });
+
+      if (progressRunningRef.current && currentTime < duration) {
         progressTimerRef.current = requestAnimationFrame(tick);
       }
     };
 
-    progressTimerRef.current = requestAnimationFrame(tick);
+    tick();
   }
 
   const isPlayingRef = useRef(false);
@@ -412,12 +522,25 @@ export default function CassetteTapePlanner() {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem("cassette-theme", darkMode ? "dark" : "light");
+    } catch {}
+  }, [darkMode]);
+
   function stopProgressTimer() {
     progressRunningRef.current = false;
+
     if (progressTimerRef.current) {
       cancelAnimationFrame(progressTimerRef.current);
       progressTimerRef.current = null;
     }
+  }
+
+  function getCurrentPlaybackTime() {
+    if (!progressRunningRef.current) return pausedOffsetRef.current;
+    const elapsed = (performance.now() - playbackStartedAtMsRef.current) / 1000;
+    return Math.min(currentDurationRef.current, Math.max(0, elapsed));
   }
 
   async function playSpecificTrack(side, index, offset = 0) {
@@ -427,20 +550,23 @@ export default function CassetteTapePlanner() {
     if (!track?.audioBuffer || !gainNodeRef.current) return;
 
     clearSilenceTimer();
-    stopProgressTimer();
     stopCurrentSource();
     manualStopRef.current = false;
 
+    const sourceId = currentSourceIdRef.current + 1;
+    currentSourceIdRef.current = sourceId;
+
     const source = audioContext.createBufferSource();
     source.buffer = track.audioBuffer;
-    source.connect(gainNodeRef.current);
-    source.onended = () => {
-      if (manualStopRef.current) {
-        manualStopRef.current = false;
-        return;
-      }
 
-      progressRunningRef.current = false;
+    const trackGainNode = audioContext.createGain();
+    trackGainNode.gain.value = normalizeVolume ? track.normalizeGain || 1 : 1;
+
+    source.connect(trackGainNode);
+    trackGainNode.connect(gainNodeRef.current);
+    source.onended = () => {
+      if (currentSourceIdRef.current !== sourceId) return;
+      sourceNodeRef.current = null;
       setProgress({ currentTime: currentDurationRef.current, duration: currentDurationRef.current });
       playNextTrackAfterEnded();
     };
@@ -450,6 +576,7 @@ export default function CassetteTapePlanner() {
 
     sourceNodeRef.current = source;
     playbackStartContextTimeRef.current = audioContext.currentTime;
+    playbackStartedAtMsRef.current = performance.now() - safeOffset * 1000;
     pausedOffsetRef.current = safeOffset;
     currentDurationRef.current = track.audioBuffer.duration;
 
@@ -530,8 +657,7 @@ export default function CassetteTapePlanner() {
 
   function pausePlayback() {
     if (!audioContextRef.current || !sourceNodeRef.current) return;
-    const elapsed = audioContextRef.current.currentTime - playbackStartContextTimeRef.current;
-    pausedOffsetRef.current = Math.min(currentDurationRef.current, pausedOffsetRef.current + elapsed);
+    pausedOffsetRef.current = getCurrentPlaybackTime();
     stopCurrentSource();
     stopProgressTimer();
     isPlayingRef.current = false;
@@ -567,6 +693,7 @@ export default function CassetteTapePlanner() {
       type: "manual",
       file: null,
       audioBuffer: null,
+      normalizeGain: 1,
     };
     if (side === "A") setSideA((prev) => [...prev, track]);
     else setSideB((prev) => [...prev, track]);
@@ -575,6 +702,61 @@ export default function CassetteTapePlanner() {
   function updateTrack(side, id, updater) {
     const setter = side === "A" ? setSideA : setSideB;
     setter((prev) => prev.map((track) => (track.id === id ? { ...track, ...updater(track) } : track)));
+  }
+
+  function reorderTracks(side, fromIndex, toIndex) {
+    const setter = side === "A" ? setSideA : setSideB;
+
+    setter((prev) => {
+      const next = [...prev];
+      const [movedTrack] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, movedTrack);
+      return next;
+    });
+  }
+
+  async function replaceTrackFile(side, id, file) {
+    if (!isSupportedAudioFile(file)) {
+      setAudioError("지원하지 않는 오디오 파일 형식입니다.");
+      return;
+    }
+
+    setIsDecoding(true);
+    setAudioError("");
+
+    try {
+      const audioContext = await ensureAudioContext();
+      const [newTrack] = await audioFilesToTracks([file], audioContext);
+
+      const setter = side === "A" ? setSideA : setSideB;
+      setter((prev) =>
+        prev.map((track) =>
+          track.id === id
+            ? {
+                ...track,
+                title: newTrack.title,
+                seconds: newTrack.seconds,
+                fileName: newTrack.fileName,
+                type: newTrack.type,
+                file: newTrack.file,
+                audioBuffer: newTrack.audioBuffer,
+                normalizeGain: newTrack.normalizeGain,
+                decodeError: newTrack.decodeError,
+              }
+            : track
+        )
+      );
+
+      if (currentTrack?.id === id) {
+        stopPlayback();
+      }
+
+      if (newTrack?.decodeError) {
+        setAudioError("교체한 파일은 현재 브라우저에서 디코딩할 수 없습니다.");
+      }
+    } finally {
+      setIsDecoding(false);
+    }
   }
 
   function removeTrack(side, id) {
@@ -611,7 +793,32 @@ export default function CassetteTapePlanner() {
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-neutral-100 to-white p-4 text-neutral-900">
+    <main className={`min-h-screen p-4 transition-colors ${darkMode ? "dark-mode bg-gradient-to-b from-neutral-950 to-neutral-900 text-neutral-100" : "bg-gradient-to-b from-neutral-100 to-white text-neutral-900"}`}>
+      <style>{`
+        .dark-mode .bg-white { background-color: #18181b !important; }
+        .dark-mode .bg-neutral-50 { background-color: #27272a !important; }
+        .dark-mode .bg-neutral-100 { background-color: #3f3f46 !important; }
+        .dark-mode .bg-neutral-200 { background-color: #52525b !important; }
+        .dark-mode .text-neutral-900 { color: #f5f5f5 !important; }
+        .dark-mode .text-neutral-800 { color: #f5f5f5 !important; }
+        .dark-mode .text-neutral-700 { color: #e5e5e5 !important; }
+        .dark-mode .text-neutral-600 { color: #d4d4d4 !important; }
+        .dark-mode .text-neutral-500 { color: #a1a1aa !important; }
+        .dark-mode .text-neutral-400 { color: #a1a1aa !important; }
+        .dark-mode .border { border-color: #3f3f46 !important; }
+        .dark-mode .border-neutral-200 { border-color: #3f3f46 !important; }
+        .dark-mode .border-neutral-300 { border-color: #52525b !important; }
+        .dark-mode input, .dark-mode select { background-color: #09090b !important; color: #f5f5f5 !important; border-color: #52525b !important; }
+        .dark-mode input::placeholder { color: #71717a !important; }
+        .dark-mode .shadow-sm { box-shadow: 0 1px 2px rgba(0,0,0,0.5) !important; }
+        .dark-mode .hover\\:bg-neutral-100:hover { background-color: #3f3f46 !important; }
+        .dark-mode .bg-red-50 { background-color: rgba(127, 29, 29, 0.35) !important; }
+        .dark-mode .text-red-700 { color: #fca5a5 !important; }
+        .dark-mode .bg-blue-50 { background-color: rgba(30, 58, 138, 0.35) !important; }
+        .dark-mode .text-blue-700 { color: #93c5fd !important; }
+        .dark-mode .bg-amber-50 { background-color: rgba(120, 53, 15, 0.35) !important; }
+        .dark-mode .text-amber-800 { color: #fcd34d !important; }
+      `}</style>
       <div className="mx-auto max-w-6xl">
         <header className="mb-6 rounded-3xl bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
@@ -619,7 +826,13 @@ export default function CassetteTapePlanner() {
               <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-neutral-500"><Music size={16} /> TAPE</div>
               <h1 className="text-3xl font-black tracking-tight">워크맨팩토리 카세트 테이프 녹음기</h1>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${darkMode ? "border-neutral-600 bg-neutral-800 text-neutral-100 hover:bg-neutral-700" : "bg-white text-neutral-900 hover:bg-neutral-100"}`}
+                onClick={() => setDarkMode((prev) => !prev)}
+              >
+                {darkMode ? "라이트 모드" : "다크 모드"}
+              </button>
               <label className="text-sm font-semibold text-neutral-600">테이프 총 길이</label>
               <input className="w-24 rounded-xl border px-3 py-2 text-right text-lg font-bold outline-none focus:ring-2 focus:ring-neutral-300" type="number" min="1" value={tapeMinutes} onChange={(event) => setTapeMinutes(Math.max(1, Number(event.target.value) || 1))} />
               <span className="text-sm text-neutral-500">분 → 각 면: {secondsToTime(sideSeconds)}</span>
@@ -667,6 +880,21 @@ export default function CassetteTapePlanner() {
             <p className="mt-1 text-xs text-neutral-500">한 곡이 끝난 뒤 다음 곡을 재생하기 전에 설정한 시간만큼 기다립니다. 이 시간은 A면/B면 사용 시간에도 포함됩니다.</p>
           </div>
 
+          <div className="mt-3 rounded-2xl border bg-neutral-50 p-3">
+            <label className="flex items-center gap-3 text-sm font-semibold text-neutral-700">
+              <input
+                type="checkbox"
+                checked={normalizeVolume}
+                onChange={(event) => setNormalizeVolume(event.target.checked)}
+                className="h-4 w-4 accent-neutral-900"
+              />
+              <span>곡별 음량 자동 보정</span>
+            </label>
+            <p className="mt-1 text-xs text-neutral-500">
+              각 음원의 평균 음량과 피크를 분석해서 곡 사이의 볼륨 차이를 줄입니다. 원본 파일은 변경되지 않습니다.
+            </p>
+          </div>
+
           {nowPlayingTitle && <p className="mt-3 rounded-xl bg-neutral-100 px-3 py-2 text-sm font-semibold">{isWaitingSilence ? "무음 대기 중" : "현재 재생 중"}: {nowPlayingTitle}</p>}
           {isDecoding && <p className="mt-3 rounded-xl bg-blue-50 px-3 py-2 text-sm text-blue-700">음원을 Web Audio API로 디코딩하는 중입니다. 긴 무손실 파일은 시간이 걸릴 수 있습니다.</p>}
           {audioError && <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{audioError}</p>}
@@ -692,6 +920,7 @@ export default function CassetteTapePlanner() {
             progress={progress}
             silenceSeconds={silenceSeconds}
             onDropTracks={(files) => handleFilesForSide("A", files)}
+            onReorderTracks={(fromIndex, toIndex) => reorderTracks("A", fromIndex, toIndex)}
             onAddManual={() => addManual("A")}
             onPlaySide={playSide}
             onPrevious={playPreviousTrack}
@@ -700,6 +929,7 @@ export default function CassetteTapePlanner() {
             onStop={stopPlayback}
             onChangeTitle={(id, title) => updateTrack("A", id, () => ({ title }))}
             onChangeSeconds={(id, seconds) => updateTrack("A", id, () => ({ seconds }))}
+            onReplaceFile={(id, file) => replaceTrackFile("A", id, file)}
             onRemove={(id) => removeTrack("A", id)}
           />
           <TapeSide
@@ -713,6 +943,7 @@ export default function CassetteTapePlanner() {
             progress={progress}
             silenceSeconds={silenceSeconds}
             onDropTracks={(files) => handleFilesForSide("B", files)}
+            onReorderTracks={(fromIndex, toIndex) => reorderTracks("B", fromIndex, toIndex)}
             onAddManual={() => addManual("B")}
             onPlaySide={playSide}
             onPrevious={playPreviousTrack}
@@ -721,6 +952,7 @@ export default function CassetteTapePlanner() {
             onStop={stopPlayback}
             onChangeTitle={(id, title) => updateTrack("B", id, () => ({ title }))}
             onChangeSeconds={(id, seconds) => updateTrack("B", id, () => ({ seconds }))}
+            onReplaceFile={(id, file) => replaceTrackFile("B", id, file)}
             onRemove={(id) => removeTrack("B", id)}
           />
         </div>
