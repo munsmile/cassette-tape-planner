@@ -347,11 +347,11 @@ export default function CassetteTapePlanner() {
 
   useEffect(() => {
     return () => {
-      [...sideA, ...sideB].forEach((track) => {
+      [...sideARef.current, ...sideBRef.current].forEach((track) => {
         if (track.objectUrl) URL.revokeObjectURL(track.objectUrl);
       });
     };
-  }, [sideA, sideB]);
+  }, []);
 
   function updateProgressFromAudio() {
     if (!audioRef.current) return;
