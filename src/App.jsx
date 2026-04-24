@@ -127,10 +127,34 @@ function TrackRow({ track, index, isCurrent, onChangeTitle, onChangeSeconds, onR
   );
 }
 
-function PlaylistControls({ label, disabled, isPlaying, isPaused, onPlay, onPrevious, onNext, onPause, onStop }) {
+function PlaylistControls({ label, disabled, isPlaying, isPaused, progress, onSeek, onPlay, onPrevious, onNext, onPause, onStop }) {
+  const progressPercent = progress.duration > 0 ? Math.min(100, Math.max(0, (progress.currentTime / progress.duration) * 100)) : 0;
+
   return (
     <div className="mt-4 rounded-2xl border bg-white p-3">
-      <div className="mb-2 text-sm font-bold">{label}면 전체 재생</div>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="text-sm font-bold">{label}면 전체 재생</div>
+        <div className="text-xs font-semibold text-neutral-500">
+          {secondsToTime(progress.currentTime)} / {secondsToTime(progress.duration)}
+        </div>
+      </div>
+
+      <div className="mb-3">
+        <input
+          className="w-full accent-neutral-900"
+          type="range"
+          min="0"
+          max={Math.max(0, Math.round(progress.duration))}
+          value={Math.min(Math.round(progress.currentTime), Math.max(0, Math.round(progress.duration)))}
+          onChange={(event) => onSeek(Number(event.target.value))}
+          disabled={disabled || progress.duration <= 0}
+          aria-label={`${label} side playback progress`}
+        />
+        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-neutral-200">
+          <div className="h-full rounded-full bg-neutral-900 transition-all" style={{ width: `${progressPercent}%` }} />
+        </div>
+      </div>
+
       <div className="grid grid-cols-5 gap-2">
         <button
           className="flex items-center justify-center gap-1 rounded-xl bg-neutral-900 px-3 py-2 text-sm font-semibold text-white hover:bg-neutral-700 disabled:cursor-not-allowed disabled:bg-neutral-300"
@@ -172,13 +196,14 @@ function PlaylistControls({ label, disabled, isPlaying, isPaused, onPlay, onPrev
   );
 }
 
-function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPlaying, isPaused, onDropTracks, onAddManual, onPlaySide, onPrevious, onNext, onPause, onStop, onChangeTitle, onChangeSeconds, onRemove }) {
+function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPlaying, isPaused, progress, onDropTracks, onAddManual, onPlaySide, onPrevious, onNext, onPause, onStop, onSeek, onChangeTitle, onChangeSeconds, onRemove }) {
   const [dragOver, setDragOver] = useState(false);
   const usedSeconds = tracks.reduce((sum, track) => sum + track.seconds, 0);
   const remainingSeconds = maxSeconds - usedSeconds;
   const isOver = remainingSeconds < 0;
   const isThisSideActive = activeSide === label;
   const playableTracks = tracks.filter((track) => track.objectUrl);
+  const sideProgress = isThisSideActive ? progress : { currentTime: 0, duration: 0 };
 
   async function handleDrop(event) {
     event.preventDefault();
@@ -237,6 +262,8 @@ function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPla
         disabled={playableTracks.length === 0}
         isPlaying={isThisSideActive && isPlaying}
         isPaused={isThisSideActive && isPaused}
+        progress={sideProgress}
+        onSeek={(seconds) => onSeek(label, seconds)}
         onPlay={() => onPlaySide(label)}
         onPrevious={() => onPrevious(label)}
         onNext={() => onNext(label)}
@@ -271,21 +298,46 @@ export default function CassetteTapePlanner() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [nowPlayingTitle, setNowPlayingTitle] = useState("");
+  const [progress, setProgress] = useState({ currentTime: 0, duration: 0 });
   const [audioError, setAudioError] = useState("");
   const audioRef = useRef(null);
   const fileInputARef = useRef(null);
   const fileInputBRef = useRef(null);
+  const activeSideRef = useRef(null);
+  const currentTrackIndexRef = useRef(-1);
+  const sideARef = useRef([]);
+  const sideBRef = useRef([]);
 
   const sideSeconds = useMemo(() => Math.round((Number(tapeMinutes) || 0) * 60 / 2), [tapeMinutes]);
   const supportsOutputSelection = typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
 
   const currentTracks = activeSide === "A" ? sideA : activeSide === "B" ? sideB : [];
-  const currentTrack = currentTrackIndex >= 0 ? currentTracks[currentTrackIndex] : null;
+  const currentPlayableTracks = currentTracks.filter((track) => track.objectUrl);
+  const currentTrack = currentTrackIndex >= 0 ? currentPlayableTracks[currentTrackIndex] : null;
+
+  useEffect(() => {
+    activeSideRef.current = activeSide;
+  }, [activeSide]);
+
+  useEffect(() => {
+    currentTrackIndexRef.current = currentTrackIndex;
+  }, [currentTrackIndex]);
+
+  useEffect(() => {
+    sideARef.current = sideA;
+  }, [sideA]);
+
+  useEffect(() => {
+    sideBRef.current = sideB;
+  }, [sideB]);
 
   useEffect(() => {
     audioRef.current = new Audio();
     audioRef.current.preload = "auto";
-    audioRef.current.onended = () => playNextTrack();
+    audioRef.current.onended = () => playNextTrackAfterEnded();
+    audioRef.current.ontimeupdate = () => updateProgressFromAudio();
+    audioRef.current.onloadedmetadata = () => updateProgressFromAudio();
+    audioRef.current.ondurationchange = () => updateProgressFromAudio();
     audioRef.current.onerror = () => {
       setAudioError("이 음원을 재생할 수 없습니다. 브라우저가 해당 무손실 포맷을 지원하는지 확인해주세요. FLAC은 Chrome/Edge에서 가장 안정적입니다.");
       setIsPlaying(false);
@@ -311,6 +363,13 @@ export default function CassetteTapePlanner() {
       });
     };
   }, [sideA, sideB]);
+
+  function updateProgressFromAudio() {
+    if (!audioRef.current) return;
+    const currentTime = Number.isFinite(audioRef.current.currentTime) ? audioRef.current.currentTime : 0;
+    const duration = Number.isFinite(audioRef.current.duration) ? audioRef.current.duration : currentTrack?.seconds || 0;
+    setProgress({ currentTime, duration });
+  }
 
   async function loadAudioDevices() {
     setAudioError("");
@@ -353,12 +412,18 @@ export default function CassetteTapePlanner() {
     return tracks.filter((track) => track.objectUrl);
   }
 
+  function getPlayableTracksFromRef(side) {
+    const tracks = side === "A" ? sideARef.current : sideBRef.current;
+    return tracks.filter((track) => track.objectUrl);
+  }
+
   async function playSpecificTrack(side, index) {
     const playableTracks = getPlayableTracks(side);
     const track = playableTracks[index];
     if (!track?.objectUrl || !audioRef.current) return;
 
     setAudioError("");
+    setProgress({ currentTime: 0, duration: track.seconds || 0 });
     try {
       audioRef.current.pause();
       audioRef.current.src = track.objectUrl;
@@ -370,10 +435,13 @@ export default function CassetteTapePlanner() {
 
       await audioRef.current.play();
       setActiveSide(side);
+      activeSideRef.current = side;
       setCurrentTrackIndex(index);
+      currentTrackIndexRef.current = index;
       setIsPlaying(true);
       setIsPaused(false);
       setNowPlayingTitle(`${side}면 - ${track.title || track.fileName || "Untitled"}`);
+      updateProgressFromAudio();
     } catch {
       setIsPlaying(false);
       setIsPaused(false);
@@ -416,6 +484,25 @@ export default function CassetteTapePlanner() {
     playSpecificTrack(side, nextIndex);
   }
 
+  function playNextTrackAfterEnded() {
+    const side = activeSideRef.current;
+    if (!side) return;
+
+    const playableTracks = getPlayableTracksFromRef(side);
+    if (playableTracks.length === 0) {
+      stopPlayback();
+      return;
+    }
+
+    const nextIndex = currentTrackIndexRef.current + 1;
+    if (nextIndex >= playableTracks.length) {
+      stopPlayback();
+      return;
+    }
+
+    playSpecificTrack(side, nextIndex);
+  }
+
   function playPreviousTrack(sideOverride) {
     const side = sideOverride || activeSide;
     if (!side) return;
@@ -430,6 +517,7 @@ export default function CassetteTapePlanner() {
   function pausePlayback() {
     if (!audioRef.current) return;
     audioRef.current.pause();
+    updateProgressFromAudio();
     setIsPlaying(false);
     setIsPaused(true);
   }
@@ -440,10 +528,21 @@ export default function CassetteTapePlanner() {
     audioRef.current.currentTime = 0;
     audioRef.current.src = "";
     setActiveSide(null);
+    activeSideRef.current = null;
     setCurrentTrackIndex(-1);
+    currentTrackIndexRef.current = -1;
     setIsPlaying(false);
     setIsPaused(false);
     setNowPlayingTitle("");
+    setProgress({ currentTime: 0, duration: 0 });
+  }
+
+  function seekPlayback(side, seconds) {
+    if (!audioRef.current || activeSide !== side) return;
+    const duration = Number.isFinite(audioRef.current.duration) ? audioRef.current.duration : progress.duration;
+    const nextTime = Math.min(Math.max(0, seconds), duration || 0);
+    audioRef.current.currentTime = nextTime;
+    setProgress((prev) => ({ ...prev, currentTime: nextTime }));
   }
 
   function addManual(side) {
@@ -572,6 +671,7 @@ export default function CassetteTapePlanner() {
             currentTrackId={currentTrack?.id}
             isPlaying={isPlaying}
             isPaused={isPaused}
+            progress={progress}
             onDropTracks={(tracks) => setSideA((prev) => [...prev, ...tracks])}
             onAddManual={() => addManual("A")}
             onPlaySide={playSide}
@@ -579,6 +679,7 @@ export default function CassetteTapePlanner() {
             onNext={playNextTrack}
             onPause={pausePlayback}
             onStop={stopPlayback}
+            onSeek={seekPlayback}
             onChangeTitle={(id, title) => updateTrack("A", id, () => ({ title }))}
             onChangeSeconds={(id, seconds) => updateTrack("A", id, () => ({ seconds }))}
             onRemove={(id) => removeTrack("A", id)}
@@ -591,6 +692,7 @@ export default function CassetteTapePlanner() {
             currentTrackId={currentTrack?.id}
             isPlaying={isPlaying}
             isPaused={isPaused}
+            progress={progress}
             onDropTracks={(tracks) => setSideB((prev) => [...prev, ...tracks])}
             onAddManual={() => addManual("B")}
             onPlaySide={playSide}
@@ -598,6 +700,7 @@ export default function CassetteTapePlanner() {
             onNext={playNextTrack}
             onPause={pausePlayback}
             onStop={stopPlayback}
+            onSeek={seekPlayback}
             onChangeTitle={(id, title) => updateTrack("B", id, () => ({ title }))}
             onChangeSeconds={(id, seconds) => updateTrack("B", id, () => ({ seconds }))}
             onRemove={(id) => removeTrack("B", id)}
