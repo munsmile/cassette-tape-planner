@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Upload, Music, X, Play, Pause, Square, Volume2 } from "lucide-react";
+import { Plus, Upload, Music, X, Play, Pause, Square, Volume2, SkipBack, SkipForward } from "lucide-react";
 
 const DEFAULT_TAPE_MINUTES = 90;
+const SUPPORTED_AUDIO_EXTENSIONS = [".mp3", ".flac", ".wav", ".aiff", ".aif", ".m4a", ".alac"];
 
 function secondsToTime(totalSeconds) {
   const safeSeconds = Math.max(0, Math.round(Number(totalSeconds) || 0));
@@ -14,9 +15,25 @@ function fileNameToTitle(fileName) {
   return fileName.replace(/\.[^/.]+$/, "").replace(/[_-]+/g, " ").trim();
 }
 
+function isSupportedAudioFile(file) {
+  const name = file.name.toLowerCase();
+  return file.type.startsWith("audio/") || SUPPORTED_AUDIO_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
+
+function getMimeTypeForFile(file) {
+  const name = file.name.toLowerCase();
+  if (name.endsWith(".flac")) return "audio/flac";
+  if (name.endsWith(".wav")) return "audio/wav";
+  if (name.endsWith(".aiff") || name.endsWith(".aif")) return "audio/aiff";
+  if (name.endsWith(".m4a") || name.endsWith(".alac")) return "audio/mp4";
+  if (name.endsWith(".mp3")) return "audio/mpeg";
+  return file.type || "audio/*";
+}
+
 function readAudioDuration(file) {
   return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
+    const blob = new Blob([file], { type: getMimeTypeForFile(file) });
+    const url = URL.createObjectURL(blob);
     const audio = new Audio();
 
     audio.preload = "metadata";
@@ -33,35 +50,42 @@ function readAudioDuration(file) {
   });
 }
 
+function createPlayableObjectUrl(file) {
+  const blob = new Blob([file], { type: getMimeTypeForFile(file) });
+  return URL.createObjectURL(blob);
+}
+
 async function audioFilesToTracks(files) {
-  const audioFiles = Array.from(files).filter((file) => {
-    const name = file.name.toLowerCase();
-    return file.type.startsWith("audio/") || name.endsWith(".mp3") || name.endsWith(".flac");
-  });
+  const audioFiles = Array.from(files).filter(isSupportedAudioFile);
 
   const tracks = [];
   for (const file of audioFiles) {
-    const duration = await readAudioDuration(file);
+    let duration = 0;
+    try {
+      duration = await readAudioDuration(file);
+    } catch {
+      duration = 0;
+    }
+
     tracks.push({
       id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
       title: fileNameToTitle(file.name),
       seconds: Math.round(duration),
       fileName: file.name,
-      type: file.type || "audio file",
+      type: getMimeTypeForFile(file),
       file,
-      objectUrl: URL.createObjectURL(file),
+      objectUrl: createPlayableObjectUrl(file),
     });
   }
   return tracks;
 }
 
-function TrackRow({ track, index, isPlaying, onPlay, onPause, onStop, onChangeTitle, onChangeSeconds, onRemove }) {
+function TrackRow({ track, index, isCurrent, onChangeTitle, onChangeSeconds, onRemove }) {
   const minutes = Math.floor(track.seconds / 60);
   const seconds = track.seconds % 60;
-  const canPlay = Boolean(track.objectUrl);
 
   return (
-    <div className="grid grid-cols-[32px_1fr_82px_82px_96px_36px] items-center gap-2 rounded-xl border bg-white p-2 shadow-sm">
+    <div className={`grid grid-cols-[32px_1fr_82px_82px_36px] items-center gap-2 rounded-xl border p-2 shadow-sm ${isCurrent ? "border-neutral-900 bg-neutral-100" : "bg-white"}`}>
       <div className="text-center text-sm font-semibold text-neutral-400">{index + 1}</div>
       <input
         className="rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-neutral-300"
@@ -92,34 +116,6 @@ function TrackRow({ track, index, isPlaying, onPlay, onPause, onStop, onChangeTi
         }}
         aria-label="seconds"
       />
-      <div className="flex items-center justify-center gap-1">
-        {isPlaying ? (
-          <button
-            className="flex h-9 w-9 items-center justify-center rounded-lg bg-neutral-900 text-white hover:bg-neutral-700"
-            onClick={() => onPause(track)}
-            aria-label="pause track"
-          >
-            <Pause size={15} />
-          </button>
-        ) : (
-          <button
-            className="flex h-9 w-9 items-center justify-center rounded-lg bg-neutral-900 text-white hover:bg-neutral-700 disabled:cursor-not-allowed disabled:bg-neutral-300"
-            onClick={() => onPlay(track)}
-            disabled={!canPlay}
-            aria-label="play track"
-          >
-            <Play size={15} />
-          </button>
-        )}
-        <button
-          className="flex h-9 w-9 items-center justify-center rounded-lg border hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
-          onClick={onStop}
-          disabled={!canPlay}
-          aria-label="stop track"
-        >
-          <Square size={14} />
-        </button>
-      </div>
       <button
         className="flex h-9 w-9 items-center justify-center rounded-lg hover:bg-neutral-100"
         onClick={() => onRemove(track.id)}
@@ -131,11 +127,58 @@ function TrackRow({ track, index, isPlaying, onPlay, onPause, onStop, onChangeTi
   );
 }
 
-function TapeSide({ label, tracks, maxSeconds, playingTrackId, onDropTracks, onAddManual, onPlay, onPause, onStop, onChangeTitle, onChangeSeconds, onRemove }) {
+function PlaylistControls({ label, disabled, isPlaying, isPaused, onPlay, onPrevious, onNext, onPause, onStop }) {
+  return (
+    <div className="mt-4 rounded-2xl border bg-white p-3">
+      <div className="mb-2 text-sm font-bold">{label}면 전체 재생</div>
+      <div className="grid grid-cols-5 gap-2">
+        <button
+          className="flex items-center justify-center gap-1 rounded-xl bg-neutral-900 px-3 py-2 text-sm font-semibold text-white hover:bg-neutral-700 disabled:cursor-not-allowed disabled:bg-neutral-300"
+          onClick={onPlay}
+          disabled={disabled}
+        >
+          <Play size={15} /> 재생
+        </button>
+        <button
+          className="flex items-center justify-center gap-1 rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
+          onClick={onPrevious}
+          disabled={disabled}
+        >
+          <SkipBack size={15} /> 이전
+        </button>
+        <button
+          className="flex items-center justify-center gap-1 rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
+          onClick={onNext}
+          disabled={disabled}
+        >
+          <SkipForward size={15} /> 다음
+        </button>
+        <button
+          className="flex items-center justify-center gap-1 rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
+          onClick={onPause}
+          disabled={disabled || (!isPlaying && !isPaused)}
+        >
+          <Pause size={15} /> 일시정지
+        </button>
+        <button
+          className="flex items-center justify-center gap-1 rounded-xl border px-3 py-2 text-sm font-semibold hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-40"
+          onClick={onStop}
+          disabled={disabled || (!isPlaying && !isPaused)}
+        >
+          <Square size={14} /> 멈춤
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPlaying, isPaused, onDropTracks, onAddManual, onPlaySide, onPrevious, onNext, onPause, onStop, onChangeTitle, onChangeSeconds, onRemove }) {
   const [dragOver, setDragOver] = useState(false);
   const usedSeconds = tracks.reduce((sum, track) => sum + track.seconds, 0);
   const remainingSeconds = maxSeconds - usedSeconds;
   const isOver = remainingSeconds < 0;
+  const isThisSideActive = activeSide === label;
+  const playableTracks = tracks.filter((track) => track.objectUrl);
 
   async function handleDrop(event) {
     event.preventDefault();
@@ -167,12 +210,11 @@ function TapeSide({ label, tracks, maxSeconds, playingTrackId, onDropTracks, onA
         </div>
       </div>
 
-      <div className="mb-3 grid grid-cols-[32px_1fr_82px_82px_96px_36px] gap-2 px-2 text-xs font-semibold text-neutral-500">
+      <div className="mb-3 grid grid-cols-[32px_1fr_82px_82px_36px] gap-2 px-2 text-xs font-semibold text-neutral-500">
         <div />
         <div>제목</div>
         <div className="text-right">분</div>
         <div className="text-right">초</div>
-        <div className="text-center">재생</div>
         <div />
       </div>
 
@@ -182,10 +224,7 @@ function TapeSide({ label, tracks, maxSeconds, playingTrackId, onDropTracks, onA
             key={track.id}
             track={track}
             index={index}
-            isPlaying={playingTrackId === track.id}
-            onPlay={onPlay}
-            onPause={onPause}
-            onStop={onStop}
+            isCurrent={isThisSideActive && currentTrackId === track.id}
             onChangeTitle={onChangeTitle}
             onChangeSeconds={onChangeSeconds}
             onRemove={onRemove}
@@ -193,9 +232,21 @@ function TapeSide({ label, tracks, maxSeconds, playingTrackId, onDropTracks, onA
         ))}
       </div>
 
+      <PlaylistControls
+        label={label}
+        disabled={playableTracks.length === 0}
+        isPlaying={isThisSideActive && isPlaying}
+        isPaused={isThisSideActive && isPaused}
+        onPlay={() => onPlaySide(label)}
+        onPrevious={() => onPrevious(label)}
+        onNext={() => onNext(label)}
+        onPause={onPause}
+        onStop={onStop}
+      />
+
       <div className={`mt-4 rounded-2xl border-2 border-dashed p-5 text-center ${dragOver ? "border-neutral-900 bg-white" : "border-neutral-300 bg-white/70"}`}>
         <Upload className="mx-auto mb-2" size={24} />
-        <p className="text-sm font-semibold">MP3 또는 FLAC 파일을 이 {label}면 박스에 드래그 앤 드롭</p>
+        <p className="text-sm font-semibold">MP3, FLAC, WAV, AIFF, M4A 파일을 이 {label}면 박스에 드래그 앤 드롭</p>
         <p className="mt-1 text-xs text-neutral-500">파일명은 제목 칸에 자동 입력되고, 음원 길이는 분/초에 자동 표시됩니다.</p>
       </div>
 
@@ -215,7 +266,10 @@ export default function CassetteTapePlanner() {
   const [sideB, setSideB] = useState([]);
   const [audioDevices, setAudioDevices] = useState([]);
   const [selectedOutputDeviceId, setSelectedOutputDeviceId] = useState("default");
-  const [playingTrackId, setPlayingTrackId] = useState(null);
+  const [activeSide, setActiveSide] = useState(null);
+  const [currentTrackIndex, setCurrentTrackIndex] = useState(-1);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [nowPlayingTitle, setNowPlayingTitle] = useState("");
   const [audioError, setAudioError] = useState("");
   const audioRef = useRef(null);
@@ -225,11 +279,17 @@ export default function CassetteTapePlanner() {
   const sideSeconds = useMemo(() => Math.round((Number(tapeMinutes) || 0) * 60 / 2), [tapeMinutes]);
   const supportsOutputSelection = typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
 
+  const currentTracks = activeSide === "A" ? sideA : activeSide === "B" ? sideB : [];
+  const currentTrack = currentTrackIndex >= 0 ? currentTracks[currentTrackIndex] : null;
+
   useEffect(() => {
     audioRef.current = new Audio();
-    audioRef.current.onended = () => {
-      setPlayingTrackId(null);
-      setNowPlayingTitle("");
+    audioRef.current.preload = "auto";
+    audioRef.current.onended = () => playNextTrack();
+    audioRef.current.onerror = () => {
+      setAudioError("이 음원을 재생할 수 없습니다. 브라우저가 해당 무손실 포맷을 지원하는지 확인해주세요. FLAC은 Chrome/Edge에서 가장 안정적입니다.");
+      setIsPlaying(false);
+      setIsPaused(false);
     };
 
     loadAudioDevices();
@@ -263,7 +323,7 @@ export default function CassetteTapePlanner() {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const outputs = devices.filter((device) => device.kind === "audiooutput");
       setAudioDevices(outputs);
-    } catch (error) {
+    } catch {
       setAudioError("오디오 출력 장치 목록을 불러올 수 없습니다.");
     }
   }
@@ -274,7 +334,7 @@ export default function CassetteTapePlanner() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach((track) => track.stop());
       await loadAudioDevices();
-    } catch (error) {
+    } catch {
       setAudioError("장치 이름 표시를 위해 브라우저의 오디오 권한이 필요할 수 있습니다.");
     }
   }
@@ -283,15 +343,22 @@ export default function CassetteTapePlanner() {
     if (!audioRef.current || !supportsOutputSelection) return;
     try {
       await audioRef.current.setSinkId(selectedOutputDeviceId);
-    } catch (error) {
+    } catch {
       setAudioError("선택한 출력 장치로 변경할 수 없습니다. 브라우저 권한 또는 HTTPS 환경을 확인해주세요.");
     }
   }
 
-  async function playTrack(track) {
-    if (!track.objectUrl || !audioRef.current) return;
-    setAudioError("");
+  function getPlayableTracks(side) {
+    const tracks = side === "A" ? sideA : sideB;
+    return tracks.filter((track) => track.objectUrl);
+  }
 
+  async function playSpecificTrack(side, index) {
+    const playableTracks = getPlayableTracks(side);
+    const track = playableTracks[index];
+    if (!track?.objectUrl || !audioRef.current) return;
+
+    setAudioError("");
     try {
       audioRef.current.pause();
       audioRef.current.src = track.objectUrl;
@@ -302,26 +369,80 @@ export default function CassetteTapePlanner() {
       }
 
       await audioRef.current.play();
-      setPlayingTrackId(track.id);
-      setNowPlayingTitle(track.title || track.fileName || "Untitled");
-    } catch (error) {
-      setPlayingTrackId(null);
-      setNowPlayingTitle("");
-      setAudioError("음원을 재생할 수 없습니다. 파일 형식, 브라우저 권한, 출력 장치를 확인해주세요.");
+      setActiveSide(side);
+      setCurrentTrackIndex(index);
+      setIsPlaying(true);
+      setIsPaused(false);
+      setNowPlayingTitle(`${side}면 - ${track.title || track.fileName || "Untitled"}`);
+    } catch {
+      setIsPlaying(false);
+      setIsPaused(false);
+      setAudioError("음원을 재생할 수 없습니다. FLAC/ALAC 같은 무손실 파일은 브라우저별 지원 차이가 있습니다. Chrome 또는 Edge에서 다시 시도해주세요.");
     }
   }
 
-  function pauseTrack() {
-    if (!audioRef.current) return;
-    audioRef.current.pause();
-    setPlayingTrackId(null);
+  async function playSide(side) {
+    const playableTracks = getPlayableTracks(side);
+    if (playableTracks.length === 0) return;
+
+    if (activeSide === side && isPaused && audioRef.current?.src) {
+      try {
+        await audioRef.current.play();
+        setIsPlaying(true);
+        setIsPaused(false);
+      } catch {
+        setAudioError("일시정지된 음원을 다시 재생할 수 없습니다.");
+      }
+      return;
+    }
+
+    const startIndex = activeSide === side && currentTrackIndex >= 0 ? currentTrackIndex : 0;
+    playSpecificTrack(side, Math.min(startIndex, playableTracks.length - 1));
   }
 
-  function stopTrack() {
+  function playNextTrack(sideOverride) {
+    const side = sideOverride || activeSide;
+    if (!side) return;
+
+    const playableTracks = getPlayableTracks(side);
+    if (playableTracks.length === 0) return;
+
+    const nextIndex = currentTrackIndex + 1;
+    if (nextIndex >= playableTracks.length) {
+      stopPlayback();
+      return;
+    }
+
+    playSpecificTrack(side, nextIndex);
+  }
+
+  function playPreviousTrack(sideOverride) {
+    const side = sideOverride || activeSide;
+    if (!side) return;
+
+    const playableTracks = getPlayableTracks(side);
+    if (playableTracks.length === 0) return;
+
+    const previousIndex = currentTrackIndex <= 0 ? 0 : currentTrackIndex - 1;
+    playSpecificTrack(side, previousIndex);
+  }
+
+  function pausePlayback() {
+    if (!audioRef.current) return;
+    audioRef.current.pause();
+    setIsPlaying(false);
+    setIsPaused(true);
+  }
+
+  function stopPlayback() {
     if (!audioRef.current) return;
     audioRef.current.pause();
     audioRef.current.currentTime = 0;
-    setPlayingTrackId(null);
+    audioRef.current.src = "";
+    setActiveSide(null);
+    setCurrentTrackIndex(-1);
+    setIsPlaying(false);
+    setIsPaused(false);
     setNowPlayingTitle("");
   }
 
@@ -349,7 +470,7 @@ export default function CassetteTapePlanner() {
     setter((prev) => {
       const target = prev.find((track) => track.id === id);
       if (target?.objectUrl) URL.revokeObjectURL(target.objectUrl);
-      if (playingTrackId === id) stopTrack();
+      if (currentTrack?.id === id) stopPlayback();
       return prev.filter((track) => track.id !== id);
     });
   }
@@ -430,13 +551,16 @@ export default function CassetteTapePlanner() {
           {audioError && (
             <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{audioError}</p>
           )}
+          <p className="mt-3 rounded-xl bg-neutral-50 px-3 py-2 text-xs text-neutral-600">
+            무손실 파일 지원: WAV/AIFF는 대부분의 브라우저에서 비교적 안정적이며, FLAC은 Chrome/Edge에서 주로 지원됩니다. ALAC/M4A는 브라우저와 OS 코덱 지원 여부에 따라 달라질 수 있습니다.
+          </p>
         </section>
 
         <div className="mb-4 flex flex-wrap gap-2">
           <button className="rounded-xl border bg-white px-4 py-2 text-sm font-semibold shadow-sm" onClick={() => fileInputARef.current?.click()}>A면 파일 선택</button>
           <button className="rounded-xl border bg-white px-4 py-2 text-sm font-semibold shadow-sm" onClick={() => fileInputBRef.current?.click()}>B면 파일 선택</button>
-          <input ref={fileInputARef} className="hidden" type="file" multiple accept="audio/mpeg,audio/mp3,audio/flac,.mp3,.flac" onChange={(event) => handleFileInput("A", event)} />
-          <input ref={fileInputBRef} className="hidden" type="file" multiple accept="audio/mpeg,audio/mp3,audio/flac,.mp3,.flac" onChange={(event) => handleFileInput("B", event)} />
+          <input ref={fileInputARef} className="hidden" type="file" multiple accept="audio/*,.mp3,.flac,.wav,.aiff,.aif,.m4a,.alac" onChange={(event) => handleFileInput("A", event)} />
+          <input ref={fileInputBRef} className="hidden" type="file" multiple accept="audio/*,.mp3,.flac,.wav,.aiff,.aif,.m4a,.alac" onChange={(event) => handleFileInput("B", event)} />
         </div>
 
         <div className="grid gap-4 lg:grid-cols-2">
@@ -444,12 +568,17 @@ export default function CassetteTapePlanner() {
             label="A"
             tracks={sideA}
             maxSeconds={sideSeconds}
-            playingTrackId={playingTrackId}
+            activeSide={activeSide}
+            currentTrackId={currentTrack?.id}
+            isPlaying={isPlaying}
+            isPaused={isPaused}
             onDropTracks={(tracks) => setSideA((prev) => [...prev, ...tracks])}
             onAddManual={() => addManual("A")}
-            onPlay={playTrack}
-            onPause={pauseTrack}
-            onStop={stopTrack}
+            onPlaySide={playSide}
+            onPrevious={playPreviousTrack}
+            onNext={playNextTrack}
+            onPause={pausePlayback}
+            onStop={stopPlayback}
             onChangeTitle={(id, title) => updateTrack("A", id, () => ({ title }))}
             onChangeSeconds={(id, seconds) => updateTrack("A", id, () => ({ seconds }))}
             onRemove={(id) => removeTrack("A", id)}
@@ -458,12 +587,17 @@ export default function CassetteTapePlanner() {
             label="B"
             tracks={sideB}
             maxSeconds={sideSeconds}
-            playingTrackId={playingTrackId}
+            activeSide={activeSide}
+            currentTrackId={currentTrack?.id}
+            isPlaying={isPlaying}
+            isPaused={isPaused}
             onDropTracks={(tracks) => setSideB((prev) => [...prev, ...tracks])}
             onAddManual={() => addManual("B")}
-            onPlay={playTrack}
-            onPause={pauseTrack}
-            onStop={stopTrack}
+            onPlaySide={playSide}
+            onPrevious={playPreviousTrack}
+            onNext={playNextTrack}
+            onPause={pausePlayback}
+            onStop={stopPlayback}
             onChangeTitle={(id, title) => updateTrack("B", id, () => ({ title }))}
             onChangeSeconds={(id, seconds) => updateTrack("B", id, () => ({ seconds }))}
             onRemove={(id) => removeTrack("B", id)}
