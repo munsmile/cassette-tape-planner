@@ -299,6 +299,7 @@ export default function CassetteTapePlanner() {
   const sideARef = useRef([]);
   const sideBRef = useRef([]);
   const silenceSecondsRef = useRef(0);
+  const selectedOutputDeviceIdRef = useRef("default");
   const silenceTimerRef = useRef(null);
 
   const sideSeconds = useMemo(() => Math.round((Number(tapeMinutes) || 0) * 60 / 2), [tapeMinutes]);
@@ -327,6 +328,10 @@ export default function CassetteTapePlanner() {
   useEffect(() => {
     silenceSecondsRef.current = silenceSeconds;
   }, [silenceSeconds]);
+
+  useEffect(() => {
+    selectedOutputDeviceIdRef.current = selectedOutputDeviceId;
+  }, [selectedOutputDeviceId]);
 
   useEffect(() => {
     audioRef.current = new Audio();
@@ -399,10 +404,10 @@ export default function CassetteTapePlanner() {
     }
   }
 
-  async function applyOutputDevice() {
-    if (!audioRef.current || !supportsOutputSelection) return;
+  async function applyOutputDevice(deviceId = selectedOutputDeviceIdRef.current) {
+    if (!audioRef.current || !supportsOutputSelection || !audioRef.current.setSinkId) return;
     try {
-      await audioRef.current.setSinkId(selectedOutputDeviceId);
+      await audioRef.current.setSinkId(deviceId || "default");
     } catch {
       setAudioError("선택한 출력 장치로 변경할 수 없습니다. 브라우저 권한 또는 HTTPS 환경을 확인해주세요.");
     }
@@ -425,9 +430,7 @@ export default function CassetteTapePlanner() {
       audioRef.current.src = track.objectUrl;
       audioRef.current.currentTime = 0;
 
-      if (supportsOutputSelection && audioRef.current.setSinkId) {
-        await audioRef.current.setSinkId(selectedOutputDeviceId);
-      }
+      await applyOutputDevice(selectedOutputDeviceIdRef.current);
 
       await audioRef.current.play();
       setActiveSide(side);
@@ -630,8 +633,10 @@ export default function CassetteTapePlanner() {
                 className="min-w-72 rounded-xl border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-neutral-300 disabled:bg-neutral-100"
                 value={selectedOutputDeviceId}
                 onChange={async (event) => {
-                  setSelectedOutputDeviceId(event.target.value);
-                  setTimeout(applyOutputDevice, 0);
+                  const nextDeviceId = event.target.value;
+                  setSelectedOutputDeviceId(nextDeviceId);
+                  selectedOutputDeviceIdRef.current = nextDeviceId;
+                  setTimeout(() => applyOutputDevice(nextDeviceId), 0);
                 }}
                 disabled={!supportsOutputSelection}
               >
