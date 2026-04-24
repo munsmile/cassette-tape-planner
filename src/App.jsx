@@ -397,11 +397,6 @@ export default function CassetteTapePlanner() {
   }
 
   function getPlayableTracks(side) {
-    const tracks = side === "A" ? sideA : sideB;
-    return tracks.filter((track) => track.objectUrl);
-  }
-
-  function getPlayableTracksFromRef(side) {
     const tracks = side === "A" ? sideARef.current : sideBRef.current;
     return tracks.filter((track) => track.objectUrl);
   }
@@ -477,7 +472,7 @@ export default function CassetteTapePlanner() {
     const side = activeSideRef.current;
     if (!side) return;
 
-    const playableTracks = getPlayableTracksFromRef(side);
+    const playableTracks = getPlayableTracks(side);
     if (playableTracks.length === 0) {
       stopPlayback();
       return;
