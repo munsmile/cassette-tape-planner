@@ -447,6 +447,7 @@ export default function CassetteTapePlanner() {
     activeSideRef.current = side;
     setCurrentTrackIndex(index);
     currentTrackIndexRef.current = index;
+    isPlayingRef.current = true;
     setIsPlaying(true);
     setIsPaused(false);
     setProgress({ currentTime: safeOffset, duration: track.audioBuffer.duration });
@@ -484,6 +485,7 @@ export default function CassetteTapePlanner() {
     const waitSeconds = Math.max(0, Number(silenceSecondsRef.current) || 0);
     if (waitSeconds > 0) {
       setIsWaitingSilence(true);
+      isPlayingRef.current = false;
       setIsPlaying(false);
       setIsPaused(false);
       setNowPlayingTitle(`${side}면 - 다음 곡까지 ${waitSeconds}초 무음`);
@@ -522,6 +524,7 @@ export default function CassetteTapePlanner() {
     pausedOffsetRef.current = Math.min(currentDurationRef.current, pausedOffsetRef.current + elapsed);
     stopCurrentSource();
     stopProgressTimer();
+    isPlayingRef.current = false;
     setIsPlaying(false);
     setIsPaused(true);
     setProgress({ currentTime: pausedOffsetRef.current, duration: currentDurationRef.current });
@@ -535,6 +538,7 @@ export default function CassetteTapePlanner() {
     activeSideRef.current = null;
     setCurrentTrackIndex(-1);
     currentTrackIndexRef.current = -1;
+    isPlayingRef.current = false;
     setIsPlaying(false);
     setIsPaused(false);
     setIsWaitingSilence(false);
