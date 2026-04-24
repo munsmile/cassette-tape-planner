@@ -127,7 +127,7 @@ function TrackRow({ track, index, isCurrent, onChangeTitle, onChangeSeconds, onR
   );
 }
 
-function PlaylistControls({ label, disabled, isPlaying, isPaused, progress, onSeek, onPlay, onPrevious, onNext, onPause, onStop }) {
+function PlaylistControls({ label, disabled, isPlaying, isPaused, progress, onPlay, onPrevious, onNext, onPause, onStop }) {
   const progressPercent = progress.duration > 0 ? Math.min(100, Math.max(0, (progress.currentTime / progress.duration) * 100)) : 0;
 
   return (
@@ -140,16 +140,6 @@ function PlaylistControls({ label, disabled, isPlaying, isPaused, progress, onSe
       </div>
 
       <div className="mb-3">
-        <input
-          className="w-full accent-neutral-900"
-          type="range"
-          min="0"
-          max={Math.max(0, Math.round(progress.duration))}
-          value={Math.min(Math.round(progress.currentTime), Math.max(0, Math.round(progress.duration)))}
-          onChange={(event) => onSeek(Number(event.target.value))}
-          disabled={disabled || progress.duration <= 0}
-          aria-label={`${label} side playback progress`}
-        />
         <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-neutral-200">
           <div className="h-full rounded-full bg-neutral-900 transition-all" style={{ width: `${progressPercent}%` }} />
         </div>
@@ -263,7 +253,6 @@ function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPla
         isPlaying={isThisSideActive && isPlaying}
         isPaused={isThisSideActive && isPaused}
         progress={sideProgress}
-        onSeek={(seconds) => onSeek(label, seconds)}
         onPlay={() => onPlaySide(label)}
         onPrevious={() => onPrevious(label)}
         onNext={() => onNext(label)}
@@ -537,13 +526,6 @@ export default function CassetteTapePlanner() {
     setProgress({ currentTime: 0, duration: 0 });
   }
 
-  function seekPlayback(side, seconds) {
-    if (!audioRef.current || activeSide !== side) return;
-    const duration = Number.isFinite(audioRef.current.duration) ? audioRef.current.duration : progress.duration;
-    const nextTime = Math.min(Math.max(0, seconds), duration || 0);
-    audioRef.current.currentTime = nextTime;
-    setProgress((prev) => ({ ...prev, currentTime: nextTime }));
-  }
 
   function addManual(side) {
     const track = {
@@ -679,7 +661,6 @@ export default function CassetteTapePlanner() {
             onNext={playNextTrack}
             onPause={pausePlayback}
             onStop={stopPlayback}
-            onSeek={seekPlayback}
             onChangeTitle={(id, title) => updateTrack("A", id, () => ({ title }))}
             onChangeSeconds={(id, seconds) => updateTrack("A", id, () => ({ seconds }))}
             onRemove={(id) => removeTrack("A", id)}
@@ -700,7 +681,6 @@ export default function CassetteTapePlanner() {
             onNext={playNextTrack}
             onPause={pausePlayback}
             onStop={stopPlayback}
-            onSeek={seekPlayback}
             onChangeTitle={(id, title) => updateTrack("B", id, () => ({ title }))}
             onChangeSeconds={(id, seconds) => updateTrack("B", id, () => ({ seconds }))}
             onRemove={(id) => removeTrack("B", id)}
