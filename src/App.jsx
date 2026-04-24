@@ -85,12 +85,41 @@ async function audioFilesToTracks(files, audioContext) {
   return tracks;
 }
 
-function TrackRow({ track, index, isCurrent, onChangeTitle, onChangeSeconds, onRemove }) {
+function TrackRow({
+  track,
+  index,
+  isCurrent,
+  isDragging,
+  onTrackDragStart,
+  onTrackDragOver,
+  onTrackDrop,
+  onTrackDragEnd,
+  onChangeTitle,
+  onChangeSeconds,
+  onRemove,
+}) {
   const minutes = Math.floor(track.seconds / 60);
   const seconds = track.seconds % 60;
 
   return (
-    <div className={`grid grid-cols-[32px_1fr_82px_82px_36px] items-center gap-2 rounded-xl border p-2 shadow-sm ${isCurrent ? "border-neutral-900 bg-neutral-100" : "bg-white"}`}>
+    <div
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "move";
+        onTrackDragStart(index);
+      }}
+      onDragOver={(event) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        onTrackDragOver(index);
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        onTrackDrop(index);
+      }}
+      onDragEnd={onTrackDragEnd}
+      className={`grid cursor-move grid-cols-[32px_1fr_82px_82px_36px] items-center gap-2 rounded-xl border p-2 shadow-sm transition ${isCurrent ? "border-neutral-900 bg-neutral-100" : "bg-white"} ${isDragging ? "opacity-40 ring-2 ring-neutral-300" : ""}`}
+    >
       <div className="text-center text-sm font-semibold text-neutral-400">{index + 1}</div>
       <input
         className="rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-neutral-300"
@@ -168,8 +197,10 @@ function PlaylistControls({ label, disabled, isPlaying, isPaused, progress, onPl
   );
 }
 
-function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPlaying, isPaused, progress, silenceSeconds, onDropTracks, onAddManual, onPlaySide, onPrevious, onNext, onPause, onStop, onChangeTitle, onChangeSeconds, onRemove }) {
+function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPlaying, isPaused, progress, silenceSeconds, onDropTracks, onReorderTracks, onAddManual, onPlaySide, onPrevious, onNext, onPause, onStop, onChangeTitle, onChangeSeconds, onRemove }) {
   const [dragOver, setDragOver] = useState(false);
+  const [draggedTrackIndex, setDraggedTrackIndex] = useState(null);
+  const [dragOverTrackIndex, setDragOverTrackIndex] = useState(null);
   const musicSeconds = tracks.reduce((sum, track) => sum + track.seconds, 0);
   const silenceGapCount = Math.max(0, tracks.length - 1);
   const silenceTotalSeconds = silenceGapCount * Math.max(0, Number(silenceSeconds) || 0);
@@ -183,8 +214,22 @@ function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPla
   async function handleDrop(event) {
     event.preventDefault();
     setDragOver(false);
-    const droppedTracks = await onDropTracks(event.dataTransfer.files);
-    return droppedTracks;
+
+    if (event.dataTransfer.files?.length > 0) {
+      await onDropTracks(event.dataTransfer.files);
+    }
+  }
+
+  function handleTrackDrop(dropIndex) {
+    if (draggedTrackIndex === null || draggedTrackIndex === dropIndex) {
+      setDraggedTrackIndex(null);
+      setDragOverTrackIndex(null);
+      return;
+    }
+
+    onReorderTracks(draggedTrackIndex, dropIndex);
+    setDraggedTrackIndex(null);
+    setDragOverTrackIndex(null);
   }
 
   return (
@@ -228,6 +273,14 @@ function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPla
             track={track}
             index={index}
             isCurrent={isThisSideActive && currentTrackId === track.id}
+            isDragging={draggedTrackIndex === index || dragOverTrackIndex === index}
+            onTrackDragStart={setDraggedTrackIndex}
+            onTrackDragOver={setDragOverTrackIndex}
+            onTrackDrop={handleTrackDrop}
+            onTrackDragEnd={() => {
+              setDraggedTrackIndex(null);
+              setDragOverTrackIndex(null);
+            }}
             onChangeTitle={onChangeTitle}
             onChangeSeconds={onChangeSeconds}
             onRemove={onRemove}
@@ -606,6 +659,17 @@ export default function CassetteTapePlanner() {
     setter((prev) => prev.map((track) => (track.id === id ? { ...track, ...updater(track) } : track)));
   }
 
+  function reorderTracks(side, fromIndex, toIndex) {
+    const setter = side === "A" ? setSideA : setSideB;
+
+    setter((prev) => {
+      const next = [...prev];
+      const [movedTrack] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, movedTrack);
+      return next;
+    });
+  }
+
   function removeTrack(side, id) {
     const setter = side === "A" ? setSideA : setSideB;
     setter((prev) => {
@@ -736,6 +800,7 @@ export default function CassetteTapePlanner() {
             progress={progress}
             silenceSeconds={silenceSeconds}
             onDropTracks={(files) => handleFilesForSide("A", files)}
+            onReorderTracks={(fromIndex, toIndex) => reorderTracks("A", fromIndex, toIndex)}
             onAddManual={() => addManual("A")}
             onPlaySide={playSide}
             onPrevious={playPreviousTrack}
@@ -757,6 +822,7 @@ export default function CassetteTapePlanner() {
             progress={progress}
             silenceSeconds={silenceSeconds}
             onDropTracks={(files) => handleFilesForSide("B", files)}
+            onReorderTracks={(fromIndex, toIndex) => reorderTracks("B", fromIndex, toIndex)}
             onAddManual={() => addManual("B")}
             onPlaySide={playSide}
             onPrevious={playPreviousTrack}
