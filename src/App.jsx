@@ -289,6 +289,8 @@ export default function CassetteTapePlanner() {
   const [nowPlayingTitle, setNowPlayingTitle] = useState("");
   const [progress, setProgress] = useState({ currentTime: 0, duration: 0 });
   const [audioError, setAudioError] = useState("");
+  const [silenceSeconds, setSilenceSeconds] = useState(0);
+  const [isWaitingSilence, setIsWaitingSilence] = useState(false);
   const audioRef = useRef(null);
   const fileInputARef = useRef(null);
   const fileInputBRef = useRef(null);
@@ -296,6 +298,8 @@ export default function CassetteTapePlanner() {
   const currentTrackIndexRef = useRef(-1);
   const sideARef = useRef([]);
   const sideBRef = useRef([]);
+  const silenceSecondsRef = useRef(0);
+  const silenceTimerRef = useRef(null);
 
   const sideSeconds = useMemo(() => Math.round((Number(tapeMinutes) || 0) * 60 / 2), [tapeMinutes]);
   const supportsOutputSelection = typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
@@ -321,6 +325,10 @@ export default function CassetteTapePlanner() {
   }, [sideB]);
 
   useEffect(() => {
+    silenceSecondsRef.current = silenceSeconds;
+  }, [silenceSeconds]);
+
+  useEffect(() => {
     audioRef.current = new Audio();
     audioRef.current.preload = "auto";
     audioRef.current.onended = () => playNextTrackAfterEnded();
@@ -338,6 +346,10 @@ export default function CassetteTapePlanner() {
     navigator.mediaDevices?.addEventListener?.("devicechange", loadAudioDevices);
     return () => {
       navigator.mediaDevices?.removeEventListener?.("devicechange", loadAudioDevices);
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.src = "";
@@ -484,6 +496,22 @@ export default function CassetteTapePlanner() {
       return;
     }
 
+    const waitSeconds = Math.max(0, Number(silenceSecondsRef.current) || 0);
+    if (waitSeconds > 0) {
+      setIsWaitingSilence(true);
+      setIsPlaying(false);
+      setIsPaused(false);
+      setNowPlayingTitle(`${side}면 - 다음 곡까지 ${waitSeconds}초 무음`);
+
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = setTimeout(() => {
+        silenceTimerRef.current = null;
+        setIsWaitingSilence(false);
+        playSpecificTrack(side, nextIndex);
+      }, waitSeconds * 1000);
+      return;
+    }
+
     playSpecificTrack(side, nextIndex);
   }
 
@@ -507,6 +535,11 @@ export default function CassetteTapePlanner() {
   }
 
   function stopPlayback() {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    setIsWaitingSilence(false);
     if (!audioRef.current) return;
     audioRef.current.pause();
     audioRef.current.currentTime = 0;
@@ -517,6 +550,7 @@ export default function CassetteTapePlanner() {
     currentTrackIndexRef.current = -1;
     setIsPlaying(false);
     setIsPaused(false);
+    setIsWaitingSilence(false);
     setNowPlayingTitle("");
     setProgress({ currentTime: 0, duration: 0 });
   }
@@ -567,7 +601,7 @@ export default function CassetteTapePlanner() {
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>
               <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-neutral-500"><Music size={16} /> TAPE</div>
-              <h1 className="text-3xl font-black tracking-tight">WalkmanFactory 카세트 테이프 녹음기</h1>
+              <h1 className="text-3xl font-black tracking-tight">카세트 테이프 플래너</h1>
             </div>
             <div className="flex items-center gap-3">
               <label className="text-sm font-semibold text-neutral-600">테이프 총 길이</label>
@@ -621,8 +655,25 @@ export default function CassetteTapePlanner() {
               현재 브라우저는 출력 장치 직접 선택 기능을 지원하지 않습니다. 이 경우 OS의 사운드 설정에서 DAC를 기본 출력 장치로 선택해주세요.
             </p>
           )}
+          <div className="mt-3 rounded-2xl border bg-neutral-50 p-3">
+            <label className="flex flex-col gap-2 text-sm font-semibold text-neutral-700 sm:flex-row sm:items-center">
+              <span>곡 사이 무음부</span>
+              <input
+                className="w-28 rounded-xl border bg-white px-3 py-2 text-right text-sm outline-none focus:ring-2 focus:ring-neutral-300"
+                type="number"
+                min="0"
+                step="0.5"
+                value={silenceSeconds}
+                onChange={(event) => setSilenceSeconds(Math.max(0, Number(event.target.value) || 0))}
+              />
+              <span className="text-neutral-500">초</span>
+            </label>
+            <p className="mt-1 text-xs text-neutral-500">한 곡이 끝난 뒤 다음 곡을 재생하기 전에 설정한 시간만큼 기다립니다.</p>
+          </div>
           {nowPlayingTitle && (
-            <p className="mt-3 rounded-xl bg-neutral-100 px-3 py-2 text-sm font-semibold">현재 재생 중: {nowPlayingTitle}</p>
+            <p className="mt-3 rounded-xl bg-neutral-100 px-3 py-2 text-sm font-semibold">
+              {isWaitingSilence ? "무음 대기 중" : "현재 재생 중"}: {nowPlayingTitle}
+            </p>
           )}
           {audioError && (
             <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{audioError}</p>
