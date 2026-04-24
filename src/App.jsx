@@ -369,8 +369,7 @@ export default function CassetteTapePlanner() {
   const silenceTimerRef = useRef(null);
   const progressTimerRef = useRef(null);
   const progressRunningRef = useRef(false);
-  const playbackStartContextTimeRef = useRef(0);
-  const playbackStartedAtMsRef = useRef(0);
+  const playbackStartPerformanceTimeRef = useRef(0);
   const pausedOffsetRef = useRef(0);
   const currentDurationRef = useRef(0);
   const manualStopRef = useRef(false);
@@ -503,18 +502,20 @@ export default function CassetteTapePlanner() {
     const tick = () => {
       if (!progressRunningRef.current) return;
 
-      const duration = currentDurationRef.current;
-      const elapsed = (performance.now() - playbackStartedAtMsRef.current) / 1000;
-      const currentTime = Math.min(duration, Math.max(0, elapsed));
+      const elapsedSeconds = (performance.now() - playbackStartPerformanceTimeRef.current) / 1000;
+      const currentTime = Math.min(currentDurationRef.current, pausedOffsetRef.current + elapsedSeconds);
 
-      setProgress({ currentTime, duration });
+      setProgress({ currentTime, duration: currentDurationRef.current });
 
-      if (progressRunningRef.current && currentTime < duration) {
-        progressTimerRef.current = requestAnimationFrame(tick);
+      if (currentTime >= currentDurationRef.current) {
+        progressRunningRef.current = false;
+        return;
       }
+
+      progressTimerRef.current = requestAnimationFrame(tick);
     };
 
-    tick();
+    progressTimerRef.current = requestAnimationFrame(tick);
   }
 
   const isPlayingRef = useRef(false);
@@ -535,12 +536,6 @@ export default function CassetteTapePlanner() {
       cancelAnimationFrame(progressTimerRef.current);
       progressTimerRef.current = null;
     }
-  }
-
-  function getCurrentPlaybackTime() {
-    if (!progressRunningRef.current) return pausedOffsetRef.current;
-    const elapsed = (performance.now() - playbackStartedAtMsRef.current) / 1000;
-    return Math.min(currentDurationRef.current, Math.max(0, elapsed));
   }
 
   async function playSpecificTrack(side, index, offset = 0) {
@@ -567,6 +562,7 @@ export default function CassetteTapePlanner() {
     source.onended = () => {
       if (currentSourceIdRef.current !== sourceId) return;
       sourceNodeRef.current = null;
+      stopProgressTimer();
       setProgress({ currentTime: currentDurationRef.current, duration: currentDurationRef.current });
       playNextTrackAfterEnded();
     };
@@ -575,8 +571,7 @@ export default function CassetteTapePlanner() {
     source.start(0, safeOffset);
 
     sourceNodeRef.current = source;
-    playbackStartContextTimeRef.current = audioContext.currentTime;
-    playbackStartedAtMsRef.current = performance.now() - safeOffset * 1000;
+    playbackStartPerformanceTimeRef.current = performance.now();
     pausedOffsetRef.current = safeOffset;
     currentDurationRef.current = track.audioBuffer.duration;
 
@@ -588,7 +583,7 @@ export default function CassetteTapePlanner() {
     setIsPlaying(true);
     setIsPaused(false);
     setProgress({ currentTime: safeOffset, duration: track.audioBuffer.duration });
-    setNowPlayingTitle(`${side}면 - ${track.title || track.fileName || "Untitled"}`);
+    setNowPlayingTitle(`${side}면 - 현재 곡: ${track.title || track.fileName || "Untitled"}`);
     setAudioError("");
     startProgressTimer();
   }
@@ -644,6 +639,7 @@ export default function CassetteTapePlanner() {
     const side = sideOverride || activeSideRef.current;
     if (!side) return;
     const playableTracks = getPlayableTracks(side);
+    if (playableTracks.length === 0) return;
     const nextIndex = Math.min(currentTrackIndexRef.current + 1, playableTracks.length - 1);
     playSpecificTrack(side, nextIndex, 0);
   }
@@ -657,7 +653,8 @@ export default function CassetteTapePlanner() {
 
   function pausePlayback() {
     if (!audioContextRef.current || !sourceNodeRef.current) return;
-    pausedOffsetRef.current = getCurrentPlaybackTime();
+    const elapsed = (performance.now() - playbackStartPerformanceTimeRef.current) / 1000;
+    pausedOffsetRef.current = Math.min(currentDurationRef.current, pausedOffsetRef.current + elapsed);
     stopCurrentSource();
     stopProgressTimer();
     isPlayingRef.current = false;
