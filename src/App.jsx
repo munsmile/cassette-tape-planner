@@ -296,6 +296,7 @@ export default function CassetteTapePlanner() {
   const pausedOffsetRef = useRef(0);
   const currentDurationRef = useRef(0);
   const manualStopRef = useRef(false);
+  const currentSourceIdRef = useRef(0);
 
   const sideSeconds = useMemo(() => Math.round((Number(tapeMinutes) || 0) * 60 / 2), [tapeMinutes]);
   const supportsAudioContextOutputSelection = typeof AudioContext !== "undefined" && "setSinkId" in AudioContext.prototype;
@@ -405,11 +406,14 @@ export default function CassetteTapePlanner() {
 
   function stopCurrentSource() {
     if (sourceNodeRef.current) {
-      manualStopRef.current = true;
+      currentSourceIdRef.current += 1;
+      sourceNodeRef.current.onended = null;
       try {
         sourceNodeRef.current.stop();
       } catch {}
-      sourceNodeRef.current.disconnect();
+      try {
+        sourceNodeRef.current.disconnect();
+      } catch {}
       sourceNodeRef.current = null;
     }
   }
@@ -452,6 +456,9 @@ export default function CassetteTapePlanner() {
     stopCurrentSource();
     manualStopRef.current = false;
 
+    const sourceId = currentSourceIdRef.current + 1;
+    currentSourceIdRef.current = sourceId;
+
     const source = audioContext.createBufferSource();
     source.buffer = track.audioBuffer;
 
@@ -461,10 +468,8 @@ export default function CassetteTapePlanner() {
     source.connect(trackGainNode);
     trackGainNode.connect(gainNodeRef.current);
     source.onended = () => {
-      if (manualStopRef.current) {
-        manualStopRef.current = false;
-        return;
-      }
+      if (currentSourceIdRef.current !== sourceId) return;
+      sourceNodeRef.current = null;
       playNextTrackAfterEnded();
     };
 
