@@ -186,7 +186,7 @@ function PlaylistControls({ label, disabled, isPlaying, isPaused, progress, onPl
   );
 }
 
-function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPlaying, isPaused, progress, silenceSeconds, \1}) {
+function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPlaying, isPaused, progress, silenceSeconds, onDropTracks, onAddManual, onPlaySide, onPrevious, onNext, onPause, onStop, onSeek, onChangeTitle, onChangeSeconds, onRemove }) {
   const [dragOver, setDragOver] = useState(false);
   const musicSeconds = tracks.reduce((sum, track) => sum + track.seconds, 0);
   const silenceGapCount = Math.max(0, tracks.length - 1);
@@ -612,7 +612,7 @@ export default function CassetteTapePlanner() {
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>
               <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-neutral-500"><Music size={16} /> TAPE</div>
-              <h1 className="text-3xl font-black tracking-tight">워크맨팩토리 카세트 테이프 녹음기</h1>
+              <h1 className="text-3xl font-black tracking-tight">카세트 테이프 플래너</h1>
             </div>
             <div className="flex items-center gap-3">
               <label className="text-sm font-semibold text-neutral-600">테이프 총 길이</label>
