@@ -25,6 +25,30 @@ async function decodeAudioFile(audioContext, file) {
   return await audioContext.decodeAudioData(arrayBuffer.slice(0));
 }
 
+function calculateNormalizeGain(audioBuffer) {
+  let sumSquares = 0;
+  let peak = 0;
+  let sampleCount = 0;
+
+  for (let channel = 0; channel < audioBuffer.numberOfChannels; channel += 1) {
+    const data = audioBuffer.getChannelData(channel);
+    for (let i = 0; i < data.length; i += 1) {
+      const sample = data[i];
+      const abs = Math.abs(sample);
+      sumSquares += sample * sample;
+      if (abs > peak) peak = abs;
+      sampleCount += 1;
+    }
+  }
+
+  const rms = Math.sqrt(sumSquares / Math.max(1, sampleCount));
+  const targetRms = 0.12;
+  const maxBoost = 3.0;
+  const peakLimit = peak > 0 ? 0.95 / peak : 1;
+  const rmsGain = rms > 0 ? targetRms / rms : 1;
+  return Math.min(rmsGain, peakLimit, maxBoost);
+}
+
 async function audioFilesToTracks(files, audioContext) {
   const audioFiles = Array.from(files).filter(isSupportedAudioFile);
   const tracks = [];
@@ -32,6 +56,7 @@ async function audioFilesToTracks(files, audioContext) {
   for (const file of audioFiles) {
     try {
       const audioBuffer = await decodeAudioFile(audioContext, file);
+      const normalizeGain = calculateNormalizeGain(audioBuffer);
       tracks.push({
         id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
         title: fileNameToTitle(file.name),
@@ -40,6 +65,7 @@ async function audioFilesToTracks(files, audioContext) {
         type: file.type || "audio file",
         file,
         audioBuffer,
+        normalizeGain,
       });
     } catch (error) {
       tracks.push({
@@ -50,6 +76,7 @@ async function audioFilesToTracks(files, audioContext) {
         type: file.type || "audio file",
         file,
         audioBuffer: null,
+        normalizeGain: 1,
         decodeError: true,
       });
     }
@@ -248,6 +275,7 @@ export default function CassetteTapePlanner() {
   const [progress, setProgress] = useState({ currentTime: 0, duration: 0 });
   const [audioError, setAudioError] = useState("");
   const [silenceSeconds, setSilenceSeconds] = useState(0);
+  const [normalizeVolume, setNormalizeVolume] = useState(true);
   const [isWaitingSilence, setIsWaitingSilence] = useState(false);
   const [isDecoding, setIsDecoding] = useState(false);
 
@@ -426,7 +454,12 @@ export default function CassetteTapePlanner() {
 
     const source = audioContext.createBufferSource();
     source.buffer = track.audioBuffer;
-    source.connect(gainNodeRef.current);
+
+    const trackGainNode = audioContext.createGain();
+    trackGainNode.gain.value = normalizeVolume ? track.normalizeGain || 1 : 1;
+
+    source.connect(trackGainNode);
+    trackGainNode.connect(gainNodeRef.current);
     source.onended = () => {
       if (manualStopRef.current) {
         manualStopRef.current = false;
@@ -557,6 +590,7 @@ export default function CassetteTapePlanner() {
       type: "manual",
       file: null,
       audioBuffer: null,
+      normalizeGain: 1,
     };
     if (side === "A") setSideA((prev) => [...prev, track]);
     else setSideB((prev) => [...prev, track]);
@@ -655,6 +689,21 @@ export default function CassetteTapePlanner() {
               <span className="text-neutral-500">초</span>
             </label>
             <p className="mt-1 text-xs text-neutral-500">한 곡이 끝난 뒤 다음 곡을 재생하기 전에 설정한 시간만큼 기다립니다. 이 시간은 A면/B면 사용 시간에도 포함됩니다.</p>
+          </div>
+
+          <div className="mt-3 rounded-2xl border bg-neutral-50 p-3">
+            <label className="flex items-center gap-3 text-sm font-semibold text-neutral-700">
+              <input
+                type="checkbox"
+                checked={normalizeVolume}
+                onChange={(event) => setNormalizeVolume(event.target.checked)}
+                className="h-4 w-4 accent-neutral-900"
+              />
+              <span>곡별 음량 자동 보정</span>
+            </label>
+            <p className="mt-1 text-xs text-neutral-500">
+              각 음원의 평균 음량과 피크를 분석해서 곡 사이의 볼륨 차이를 줄입니다. 원본 파일은 변경되지 않습니다.
+            </p>
           </div>
 
           {nowPlayingTitle && <p className="mt-3 rounded-xl bg-neutral-100 px-3 py-2 text-sm font-semibold">{isWaitingSilence ? "무음 대기 중" : "현재 재생 중"}: {nowPlayingTitle}</p>}
