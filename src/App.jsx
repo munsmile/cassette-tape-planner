@@ -186,9 +186,12 @@ function PlaylistControls({ label, disabled, isPlaying, isPaused, progress, onPl
   );
 }
 
-function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPlaying, isPaused, progress, onDropTracks, onAddManual, onPlaySide, onPrevious, onNext, onPause, onStop, onSeek, onChangeTitle, onChangeSeconds, onRemove }) {
+function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPlaying, isPaused, progress, silenceSeconds, \1}) {
   const [dragOver, setDragOver] = useState(false);
-  const usedSeconds = tracks.reduce((sum, track) => sum + track.seconds, 0);
+  const musicSeconds = tracks.reduce((sum, track) => sum + track.seconds, 0);
+  const silenceGapCount = Math.max(0, tracks.length - 1);
+  const silenceTotalSeconds = silenceGapCount * Math.max(0, Number(silenceSeconds) || 0);
+  const usedSeconds = musicSeconds + silenceTotalSeconds;
   const remainingSeconds = maxSeconds - usedSeconds;
   const isOver = remainingSeconds < 0;
   const isThisSideActive = activeSide === label;
@@ -222,6 +225,11 @@ function TapeSide({ label, tracks, maxSeconds, activeSide, currentTrackId, isPla
           <div className={`text-sm ${isOver ? "font-semibold text-red-600" : "text-neutral-500"}`}>
             사용 남은 시간: {isOver ? `-${secondsToTime(Math.abs(remainingSeconds))}` : secondsToTime(remainingSeconds)}
           </div>
+          {silenceTotalSeconds > 0 && (
+            <div className="text-xs text-neutral-400">
+              무음부 포함: +{secondsToTime(silenceTotalSeconds)} ({silenceGapCount}구간)
+            </div>
+          )}
         </div>
       </div>
 
@@ -705,6 +713,7 @@ export default function CassetteTapePlanner() {
             isPlaying={isPlaying}
             isPaused={isPaused}
             progress={progress}
+            silenceSeconds={silenceSeconds}
             onDropTracks={(tracks) => setSideA((prev) => [...prev, ...tracks])}
             onAddManual={() => addManual("A")}
             onPlaySide={playSide}
@@ -725,6 +734,7 @@ export default function CassetteTapePlanner() {
             isPlaying={isPlaying}
             isPaused={isPaused}
             progress={progress}
+            silenceSeconds={silenceSeconds}
             onDropTracks={(tracks) => setSideB((prev) => [...prev, ...tracks])}
             onAddManual={() => addManual("B")}
             onPlaySide={playSide}
